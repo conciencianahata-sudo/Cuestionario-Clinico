@@ -189,6 +189,28 @@
   }
 
 
+  /* ---------- historia biográfica (tabla) ---------- */
+  .bio-table{
+    width:100%; table-layout:fixed; border-collapse:separate; border-spacing:0;
+    border:1.5px solid var(--line); border-radius:10px; overflow:hidden;
+    margin-bottom:14px; background:#fff;
+  }
+  .bio-table th{
+    background:color-mix(in srgb, var(--accent, var(--purple)) 14%, #fff);
+    color:var(--ink); text-align:left; font-size:13.5px; font-weight:700;
+    padding:9px 12px; border-bottom:1.5px solid var(--line);
+  }
+  .bio-table th:first-child, .bio-table td:first-child{ width:34%; }
+  .bio-table th + th, .bio-table td + td{ border-left:1px solid var(--line); }
+  .bio-table td{ padding:8px; vertical-align:top; border-bottom:1px solid var(--line); }
+  .bio-table tr:last-child td{ border-bottom:none; }
+  .bio-table textarea{ min-height:44px; font-size:14px; }
+  .bio-remove{
+    display:block; margin:5px 0 0 2px; padding:0;
+    background:none; border:none; color:var(--ink-soft); cursor:pointer;
+    font-size:12.5px; text-decoration:underline;
+  }
+
   /* ---------- cuadro para cargar respuestas ---------- */
   .modal-overlay{
     position:fixed; inset:0; z-index:100;
@@ -253,10 +275,12 @@
     .actions{ flex-direction:column; }
     .btn{ width:100%; }
     .field-row{ flex-direction:column; gap:0; }
+    .bio-table th:first-child, .bio-table td:first-child{ width:38%; }
+    .bio-table td{ padding:6px; }
   }
 
   @media print{
-    .topbar, .actions, .add-entry-btn, .fa-remove, .fam-remove, .autosave-flag, .modal-overlay{ display:none !important; }
+    .topbar, .actions, .add-entry-btn, .fa-remove, .fam-remove, .bio-remove, .autosave-flag, .modal-overlay{ display:none !important; }
     body{ background:#fff; }
     .card, .final-card, .confid{ box-shadow:none; border-color:#999 !important; }
     input, textarea{ border:1px solid #999 !important; }
@@ -419,6 +443,7 @@ const SECTIONS = [
       {id:"q53", label:"¿Algún familiar cercano ha tenido o tiene alguna dificultad de salud mental?", type:"textarea"},
       {id:"q54", label:"¿Hay antecedentes médicos importantes en tu familia? (por ejemplo, enfermedades crónicas)", type:"textarea"},
     ]},
+  { id:"sH", letter:"H", title:"Historia biográfica relevante", subtitle:"Los acontecimientos importantes de tu vida, en orden cronológico", color:"var(--teal)", special:"biography" },
   { id:"s3", letter:"3", title:"Una situación reciente en detalle", subtitle:"Esto ayuda a entender cómo se conectan tus pensamientos, emociones y conductas", color:"var(--purple)", special:"functional" },
   { id:"s4", letter:"4", title:"Expectativas y metas", color:"var(--gold)",
     fields:[
@@ -449,6 +474,15 @@ const FAM_COUNT_KEY = "ajna_cuestionario_fam_count_v1";
 
 let faEntryCount = parseInt(localStorage.getItem(FA_COUNT_KEY) || "2", 10);
 let famEntryCount = parseInt(localStorage.getItem(FAM_COUNT_KEY) || "1", 10);
+
+const BIO_LABELS = [
+  {key:"etapa", label:"Etapa / Fecha"},
+  {key:"hecho", label:"Hecho relevante"},
+];
+const BIO_PLACEHOLDERS = ["Ej.: Infancia (0–6 años)", "Ej.: Adolescencia", "Ej.: Juventud, 2015", "Ej.: Actualidad"];
+const BIO_COUNT_KEY = "ajna_cuestionario_bio_count_v1";
+const BIO_DEFAULT_ROWS = 4;
+let bioEntryCount = parseInt(localStorage.getItem(BIO_COUNT_KEY) || String(BIO_DEFAULT_ROWS), 10);
 
 function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
@@ -647,6 +681,86 @@ function buildFamilyField(f, colorVar) {
   return wrap;
 }
 
+function buildBioRow(index, onRemove) {
+  const tr = el("tr", { class: "bio-row", "data-entry": index });
+
+  const idE = `bio_${index}_etapa`;
+  const taE = el("textarea", { id: idE, name: idE, rows: "2", "aria-label": `Etapa o fecha (fila ${index + 1})`,
+                               placeholder: BIO_PLACEHOLDERS[index] || "" });
+  taE.addEventListener("input", () => { autoGrow(taE); saveField(idE, taE.value); });
+  const td1 = el("td", {}, [taE]);
+  if (index > 0) {
+    const rm = el("button", { type: "button", class: "bio-remove" }, [document.createTextNode("Quitar fila")]);
+    rm.addEventListener("click", () => onRemove(index));
+    td1.appendChild(rm);
+  }
+
+  const idH = `bio_${index}_hecho`;
+  const taH = el("textarea", { id: idH, name: idH, rows: "2", "aria-label": `Hecho relevante (fila ${index + 1})`,
+                               placeholder: index === 0 ? "Describe brevemente qué ocurrió y cómo te afectó" : "" });
+  taH.addEventListener("input", () => { autoGrow(taH); saveField(idH, taH.value); });
+  const td2 = el("td", {}, [taH]);
+
+  tr.appendChild(td1);
+  tr.appendChild(td2);
+  return tr;
+}
+
+function buildBioSection(card, sec) {
+  card.appendChild(el("p", { class: "notebox" }, [document.createTextNode(
+    "Anota los acontecimientos de tu vida que consideres importantes, en orden cronológico: por ejemplo mudanzas, cambios de colegio, pérdidas o duelos, separaciones, enfermedades, logros, relaciones significativas o cambios laborales. En la primera columna puedes indicar una etapa (infancia, adolescencia…) o una fecha o edad aproximada."
+  )]));
+
+  const table = el("table", { class: "bio-table" });
+  const thead = el("thead", {}, [el("tr", {}, BIO_LABELS.map(l => el("th", { scope: "col" }, [document.createTextNode(l.label)])))]);
+  const tbody = el("tbody", { id: "bioEntries" });
+  table.appendChild(thead);
+  table.appendChild(tbody);
+
+  // reconstruye las filas con índices consecutivos al quitar una,
+  // evitando que datos de una fila eliminada reaparezcan tras recargar
+  function reindexBio(excludeIndex) {
+    const survivors = Array.from(tbody.querySelectorAll(".bio-row"))
+      .filter(row => parseInt(row.getAttribute("data-entry"), 10) !== excludeIndex)
+      .map(row => {
+        const idx = row.getAttribute("data-entry");
+        const data = {};
+        BIO_LABELS.forEach(l => {
+          const node = document.getElementById(`bio_${idx}_${l.key}`);
+          data[l.key] = node ? node.value : "";
+        });
+        return data;
+      });
+    const store = loadStore();
+    Object.keys(store).forEach(k => { if (k.startsWith("bio_")) delete store[k]; });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
+    tbody.innerHTML = "";
+    survivors.forEach((data, i) => {
+      tbody.appendChild(buildBioRow(i, reindexBio));
+      BIO_LABELS.forEach(l => {
+        const node = document.getElementById(`bio_${i}_${l.key}`);
+        if (node) { node.value = data[l.key]; autoGrow(node); saveField(`bio_${i}_${l.key}`, data[l.key]); }
+      });
+    });
+    bioEntryCount = survivors.length;
+    localStorage.setItem(BIO_COUNT_KEY, bioEntryCount);
+    updatePetals();
+  }
+
+  for (let i = 0; i < bioEntryCount; i++) tbody.appendChild(buildBioRow(i, reindexBio));
+  card.appendChild(el("div", { style: "overflow-x:auto;" }, [table]));
+
+  const addBtn = el("button", { type: "button", class: "add-entry-btn" }, [document.createTextNode("+ Agregar otra fila")]);
+  addBtn.addEventListener("click", () => {
+    const idx = tbody.querySelectorAll(".bio-row").length;
+    tbody.appendChild(buildBioRow(idx, reindexBio));
+    bioEntryCount = idx + 1;
+    localStorage.setItem(BIO_COUNT_KEY, bioEntryCount);
+    restoreValues();
+  });
+  card.appendChild(addBtn);
+}
+
 function renderForm() {
   const form = document.getElementById("quizForm");
   const petalNav = document.getElementById("petalNav");
@@ -664,7 +778,9 @@ function renderForm() {
       card.appendChild(el("p", { class: "card-sub" }, [document.createTextNode(sec.subtitle)]));
     }
 
-    if (sec.special === "functional") {
+    if (sec.special === "biography") {
+      buildBioSection(card, sec);
+    } else if (sec.special === "functional") {
       card.appendChild(el("p", { class: "notebox" }, [document.createTextNode(
         "Piensa en una o varias ocasiones recientes en las que se presentó tu dificultad, y describe con el mayor detalle posible cada parte."
       )]));
@@ -819,7 +935,19 @@ function compileText() {
     lines.push("");
     lines.push(`${sec.letter} — ${sec.title}`.toUpperCase());
     lines.push("-".repeat(40));
-    if (sec.special === "functional") {
+    if (sec.special === "biography") {
+      let any = false;
+      document.querySelectorAll(".bio-row").forEach((row, i) => {
+        const e = (store[`bio_${i}_etapa`] || "").trim();
+        const h = (store[`bio_${i}_hecho`] || "").trim();
+        if (!e && !h) return;
+        any = true;
+        lines.push(`Fila ${i + 1}:`);
+        BIO_LABELS.forEach(l => lines.push(`  ${l.label}: ${store[`bio_${i}_${l.key}`] || "(sin responder)"}`));
+        lines.push("");
+      });
+      if (!any) { lines.push("(sin responder)"); lines.push(""); }
+    } else if (sec.special === "functional") {
       const entries = document.querySelectorAll(".fa-entry");
       entries.forEach((entry, i) => {
         lines.push(`Situación ${i + 1}:`);
@@ -882,7 +1010,17 @@ function buildWordDocument() {
     body += `<h2>${escapeHtml(sec.letter)} — ${escapeHtml(sec.title)}</h2>`;
     if (sec.subtitle) body += `<p class="subtitle"><i>${escapeHtml(sec.subtitle)}</i></p>`;
 
-    if (sec.special === "functional") {
+    if (sec.special === "biography") {
+      let rowsHtml = "";
+      document.querySelectorAll(".bio-row").forEach((row, i) => {
+        const e = (store[`bio_${i}_etapa`] || "").trim();
+        const h = (store[`bio_${i}_hecho`] || "").trim();
+        if (!e && !h) return;
+        rowsHtml += `<tr><td>${escapeHtml(e)}</td><td>${escapeHtml(h)}</td></tr>`;
+      });
+      if (!rowsHtml) rowsHtml = `<tr><td colspan="2">(sin responder)</td></tr>`;
+      body += `<table class="bio" border="1" cellspacing="0" cellpadding="6"><tr><th width="30%">Etapa / Fecha</th><th>Hecho relevante</th></tr>${rowsHtml}</table>`;
+    } else if (sec.special === "functional") {
       const entries = document.querySelectorAll(".fa-entry");
       entries.forEach((entry, i) => {
         body += `<p class="q"><b>Situación ${i + 1}</b></p>`;
@@ -936,6 +1074,9 @@ function buildWordDocument() {
   .a{ margin-top:0; margin-bottom:10pt; color:#2E2A28; }
   .footer{ color:#8A8A8A; margin-top:24pt; font-size:9pt; }
   hr{ border:none; border-top:1px solid #D8B9A8; }
+  table.bio{ border-collapse:collapse; width:100%; margin-bottom:10pt; }
+  table.bio th{ background:#F3E3EC; color:#5C1A43; text-align:left; border:1px solid #BBA; }
+  table.bio td{ vertical-align:top; border:1px solid #BBA; }
 </style>
 </head>
 <body>${body}</body>
@@ -975,10 +1116,12 @@ function parseImportedText(raw) {
   const sectionHeaderNorms = new Set();
   let familyNorm = "";
   let functionalHeaderNorm = "";
+  let bioHeaderNorm = "";
   SECTIONS.forEach(sec => {
     const hdr = normLabel(`${sec.letter} ${sec.title}`);
     sectionHeaderNorms.add(hdr);
     if (sec.special === "functional") { functionalHeaderNorm = hdr; return; }
+    if (sec.special === "biography") { bioHeaderNorm = hdr; return; }
     flattenFields(sec.fields).forEach(f => {
       if (f.type === "family") familyNorm = normLabel(f.label);
       else simpleByNorm[normLabel(f.label)] = f;
@@ -986,14 +1129,17 @@ function parseImportedText(raw) {
   });
   const famKeyByNorm = {};
   FAM_LABELS.forEach(l => { famKeyByNorm[normLabel(l.label)] = l.key; });
+  const bioKeyByNorm = {};
+  BIO_LABELS.forEach(l => { bioKeyByNorm[normLabel(l.label)] = l.key; });
   const faKeyByNorm = {};
   FA_LABELS.forEach(l => { faKeyByNorm[normLabel(l.label)] = l.key; });
 
-  const result = { fields: {}, family: [], functional: [], count: 0 };
+  const result = { fields: {}, family: [], functional: [], biography: [], count: 0 };
   let mode = "none";
   let cur = null;
   let curPerson = null;
   let curSit = null;
+  let curBio = null;
 
   function flush() {
     if (!cur) return;
@@ -1017,7 +1163,8 @@ function parseImportedText(raw) {
 
     if (n && sectionHeaderNorms.has(n)) {
       flush();
-      mode = (n === functionalHeaderNorm) ? "functional" : "none";
+      mode = (n === functionalHeaderNorm) ? "functional" : (n === bioHeaderNorm) ? "biography" : "none";
+      curBio = null;
       continue;
     }
 
@@ -1046,6 +1193,17 @@ function parseImportedText(raw) {
       continue;
     }
 
+    if (mode === "biography") {
+      if (/^Fila\s*\d+\s*:\s*$/i.test(t)) { flush(); curBio = {}; result.biography.push(curBio); continue; }
+      const ci = t.indexOf(":");
+      if (ci > 0 && curBio) {
+        const key = bioKeyByNorm[normLabel(t.slice(0, ci))];
+        if (key) { flush(); cur = { kind: "bio", obj: curBio, key, buf: [t.slice(ci + 1)] }; continue; }
+      }
+      if (cur) cur.buf.push(line);
+      continue;
+    }
+
     if (mode === "functional") {
       if (/^Situaci[oó]n\s*\d+\s*:\s*$/i.test(t)) { flush(); curSit = {}; result.functional.push(curSit); continue; }
       const ci = t.indexOf(":");
@@ -1068,8 +1226,11 @@ function applyImportedAnswers(parsed) {
   Object.keys(parsed.fields).forEach(id => { store[id] = parsed.fields[id]; });
   parsed.family.forEach((p, i) => FAM_LABELS.forEach(l => { if (p[l.key]) store[`fam_${i}_${l.key}`] = p[l.key]; }));
   parsed.functional.forEach((s, i) => FA_LABELS.forEach(l => { if (s[l.key]) store[`fa_${i}_${l.key}`] = s[l.key]; }));
+  parsed.biography.forEach((r, i) => BIO_LABELS.forEach(l => { if (r[l.key]) store[`bio_${i}_${l.key}`] = r[l.key]; }));
   localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
 
+  bioEntryCount = Math.max(parsed.biography.length, BIO_DEFAULT_ROWS);
+  localStorage.setItem(BIO_COUNT_KEY, bioEntryCount);
   famEntryCount = Math.max(1, parsed.family.length);
   faEntryCount = Math.max(1, parsed.functional.length);
   localStorage.setItem(FAM_COUNT_KEY, famEntryCount);
@@ -1190,6 +1351,8 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(FA_COUNT_KEY);
       localStorage.removeItem(FAM_COUNT_KEY);
+      localStorage.removeItem(BIO_COUNT_KEY);
+      bioEntryCount = BIO_DEFAULT_ROWS;
       faEntryCount = 2;
       famEntryCount = 1;
       renderForm();
